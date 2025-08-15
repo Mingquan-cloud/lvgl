@@ -4,6 +4,7 @@
 #include "demos/lv_demos.h"
 #include <stdio.h>
 #include <stdbool.h>
+#include <string.h>
 
 // 菜单项结构体，支持图标、文字、数字和子菜单
 typedef struct menu_item_s {
@@ -26,6 +27,12 @@ static void on_screen_key_event(lv_event_t* e);
 static void preview_level2_for(const menu_item_t* parent_item);
 static void enter_level2_focus(void);
 static void exit_level2_focus(void);
+// 新增：第三级（右侧）
+static void show_level3_for(const menu_item_t* item);
+static void enter_level3_focus(void);
+static void exit_level3_focus(void);
+static bool is_brightness_item(const menu_item_t* item);
+static void on_brightness_arc_event(lv_event_t* e);
 
 // 全局样式与对象
 static lv_style_t g_style_item;
@@ -35,9 +42,11 @@ static lv_style_t g_style_item_disabled;
 static lv_obj_t* g_menu_root = NULL;
 static lv_obj_t* g_menu_level1 = NULL;
 static lv_obj_t* g_menu_level2 = NULL;
+static lv_obj_t* g_menu_level3 = NULL;
 
 static lv_group_t* g_group_level1 = NULL;
 static lv_group_t* g_group_level2 = NULL;
+static lv_group_t* g_group_level3 = NULL;
 
 static lv_indev_t* g_keypad_indev = NULL;
 static lv_indev_t* g_encoder_indev = NULL;
@@ -45,12 +54,18 @@ static lv_indev_t* g_encoder_indev = NULL;
 static const menu_item_t* g_current_level2_parent = NULL;
 static lv_obj_t* g_last_focused_level1_btn = NULL;
 static bool g_in_level2_focus = false;
+static bool g_in_level3_focus = false;
+
+// 亮度控件与值
+static lv_obj_t* g_brightness_arc = NULL;
+static lv_obj_t* g_brightness_value_label = NULL;
+static int32_t g_brightness_value = 80;
 
 // 示例菜单数据
 static const menu_item_t SETTINGS_CHILDREN[] = {
-	{ LV_SYMBOL_EYE_OPEN, "Brightness", 80, false, NULL, 0, false },
 	{ LV_SYMBOL_AUDIO,    "Volume", 50, false, NULL, 0, false },
 	{ LV_SYMBOL_EDIT,     "Language", -1, false, NULL, 0, false },
+	{ LV_SYMBOL_EYE_OPEN, "Brightness", 80, false, NULL, 0, false },
 };
 
 static const menu_item_t ABOUT_CHILDREN[] = {
@@ -59,9 +74,9 @@ static const menu_item_t ABOUT_CHILDREN[] = {
 };
 
 static const menu_item_t TOP_LEVEL_ITEMS[] = {
-	{ LV_SYMBOL_SETTINGS,   "Settings", -1, false, SETTINGS_CHILDREN, sizeof(SETTINGS_CHILDREN) / sizeof(SETTINGS_CHILDREN[0]), false },
 	{ LV_SYMBOL_WIFI,       "Network", 3,  true,  NULL, 0, false }, // 示例禁用项
 	{ LV_SYMBOL_FILE,       "File", -1, false, NULL, 0, false },
+	{ LV_SYMBOL_SETTINGS,   "Settings", -1, false, SETTINGS_CHILDREN, sizeof(SETTINGS_CHILDREN) / sizeof(SETTINGS_CHILDREN[0]), false },
 	{ LV_SYMBOL_HOME,       "About", -1, false, ABOUT_CHILDREN, sizeof(ABOUT_CHILDREN) / sizeof(ABOUT_CHILDREN[0]), false },
 };
 
@@ -107,6 +122,11 @@ static void set_children_text_color(lv_obj_t* btn, lv_color_t color)
 	}
 }
 
+static bool is_brightness_item(const menu_item_t* item)
+{
+	return item && item->label_text && strcmp(item->label_text, "Brightness") == 0;
+}
+
 static void on_menu_item_event(lv_event_t* e)
 {
 	lv_event_code_t code = lv_event_get_code(e);
@@ -120,9 +140,12 @@ static void on_menu_item_event(lv_event_t* e)
 			g_last_focused_level1_btn = obj;
 			if (item && item->children && item->child_count > 0) {
 				preview_level2_for(item);
+				// 预览时清空第三级
+				build_level_items(g_menu_level3, NULL, 0, g_group_level3, false);
 			} else {
 				// 没有子项则清空右侧
 				build_level_items(g_menu_level2, NULL, 0, g_group_level2, false);
+				build_level_items(g_menu_level3, NULL, 0, g_group_level3, false);
 			}
 		}
 		return;
@@ -147,12 +170,22 @@ static void on_menu_item_event(lv_event_t* e)
 
 	// 点击或回车：
 	if (parent == g_menu_level1) {
-		// 仅当一级被点击/回车时，才进入右侧焦点
+		// 仅当一级被点击/回车时，才进入中间列焦点
 		enter_level2_focus();
 		return;
 	}
 
-	// parent == g_menu_level2 的点击根据业务自行处理
+	if (parent == g_menu_level2) {
+		if (is_brightness_item(item)) {
+			show_level3_for(item);
+			enter_level3_focus();
+			return;
+		}
+		// 可在此为其他二级项添加进入第三级的动作
+		return;
+	}
+
+	// parent == g_menu_level3 的点击根据业务自行处理
 }
 
 static void on_screen_key_event(lv_event_t* e)
@@ -160,8 +193,13 @@ static void on_screen_key_event(lv_event_t* e)
 	if (lv_event_get_code(e) != LV_EVENT_KEY) return;
 	uint32_t key = lv_event_get_key(e);
 	if (key == LV_KEY_ESC) {
+		if (g_in_level3_focus) {
+			exit_level3_focus();
+			return;
+		}
 		if (g_in_level2_focus) {
 			exit_level2_focus();
+			return;
 		}
 	}
 }
@@ -257,6 +295,98 @@ static void exit_level2_focus(void)
 	}
 }
 
+static void update_brightness_label(int32_t v)
+{
+	if (!g_brightness_value_label) return;
+	char buf[16];
+	lv_snprintf(buf, sizeof(buf), "%d", v);
+	lv_label_set_text(g_brightness_value_label, buf);
+}
+
+static void on_brightness_arc_event(lv_event_t* e)
+{
+	lv_event_code_t code = lv_event_get_code(e);
+	lv_obj_t* obj = lv_event_get_target(e);
+	if (code == LV_EVENT_VALUE_CHANGED) {
+		int32_t v = lv_arc_get_value(obj);
+		g_brightness_value = v;
+		update_brightness_label(v);
+		return;
+	}
+	if (code == LV_EVENT_KEY) {
+		uint32_t key = lv_event_get_key(e);
+		int32_t v = lv_arc_get_value(obj);
+		int32_t step_small = 1;
+		int32_t step_large = 5;
+		switch (key) {
+		case LV_KEY_LEFT:
+		case LV_KEY_DOWN:
+			v -= step_small; break;
+		case LV_KEY_RIGHT:
+		case LV_KEY_UP:
+			v += step_small; break;
+		case LV_KEY_PREV:
+			v -= step_large; break; // PgUp
+		case LV_KEY_NEXT:
+			v += step_large; break; // PgDn
+		default:
+			return;
+		}
+		if (v < 0) v = 0;
+		if (v > 100) v = 100;
+		lv_arc_set_value(obj, v);
+		// LV_EVENT_VALUE_CHANGED 将更新标签
+	}
+}
+
+static void show_level3_for(const menu_item_t* item)
+{
+	lv_obj_clean(g_menu_level3);
+	g_brightness_arc = NULL;
+	g_brightness_value_label = NULL;
+	if (g_group_level3) lv_group_remove_all_objs(g_group_level3);
+
+	if (is_brightness_item(item)) {
+		// 标题
+		lv_obj_t* title = lv_label_create(g_menu_level3);
+		lv_label_set_text(title, "Brightness");
+
+		// Arc 控件
+		g_brightness_arc = lv_arc_create(g_menu_level3);
+		lv_obj_set_size(g_brightness_arc, 180, 180);
+		lv_arc_set_bg_angles(g_brightness_arc, 135, 45);
+		lv_arc_set_range(g_brightness_arc, 0, 100);
+		lv_arc_set_value(g_brightness_arc, g_brightness_value);
+		lv_obj_center(g_brightness_arc);
+		lv_obj_add_event_cb(g_brightness_arc, on_brightness_arc_event, LV_EVENT_ALL, NULL);
+		if (g_group_level3) lv_group_add_obj(g_group_level3, g_brightness_arc);
+
+		// 数值标签
+		g_brightness_value_label = lv_label_create(g_menu_level3);
+		update_brightness_label(g_brightness_value);
+		lv_obj_align_to(g_brightness_value_label, g_brightness_arc, LV_ALIGN_OUT_BOTTOM_MID, 0, 12);
+	} else {
+		lv_obj_t* label = lv_label_create(g_menu_level3);
+		lv_label_set_text(label, "No details");
+	}
+}
+
+static void enter_level3_focus(void)
+{
+	g_in_level3_focus = true;
+	if (g_keypad_indev) lv_indev_set_group(g_keypad_indev, g_group_level3);
+	if (g_encoder_indev) lv_indev_set_group(g_encoder_indev, g_group_level3);
+	if (g_brightness_arc) lv_group_focus_obj(g_brightness_arc);
+}
+
+static void exit_level3_focus(void)
+{
+	g_in_level3_focus = false;
+	if (g_keypad_indev) lv_indev_set_group(g_keypad_indev, g_group_level2);
+	if (g_encoder_indev) lv_indev_set_group(g_encoder_indev, g_group_level2);
+	if (g_group_level2) lv_group_focus_next(g_group_level2);
+}
+
 int main()
 {
 	lv_init();
@@ -303,7 +433,7 @@ int main()
 	// 初始化样式与菜单容器
 	init_menu_styles();
 
-	// 根容器：左右两列
+	// 根容器：三列（左：一级；中：二级；右：三级）
 	g_menu_root = lv_obj_create(lv_scr_act());
 	lv_obj_set_size(g_menu_root, lv_pct(100), lv_pct(100));
 	lv_obj_set_style_bg_opa(g_menu_root, LV_OPA_0, 0);
@@ -314,20 +444,26 @@ int main()
 
 	g_menu_level1 = create_menu_panel(g_menu_root);
 	g_menu_level2 = create_menu_panel(g_menu_root);
+	g_menu_level3 = create_menu_panel(g_menu_root);
 
-	// 左列固定宽度，右列自适应
+	// 列宽：左固定 260，中自适应，右固定 300
 	lv_obj_set_width(g_menu_level1, 260);
 	lv_obj_set_height(g_menu_level1, lv_pct(100));
 	lv_obj_set_flex_grow(g_menu_level1, 0);
 	lv_obj_set_width(g_menu_level2, lv_pct(100));
 	lv_obj_set_height(g_menu_level2, lv_pct(100));
 	lv_obj_set_flex_grow(g_menu_level2, 1);
+	lv_obj_set_width(g_menu_level3, 300);
+	lv_obj_set_height(g_menu_level3, lv_pct(100));
+	lv_obj_set_flex_grow(g_menu_level3, 0);
 
 	// 创建焦点组并绑定键盘/编码器（初始在一级）
 	g_group_level1 = lv_group_create();
 	g_group_level2 = lv_group_create();
+	g_group_level3 = lv_group_create();
 	lv_group_set_wrap(g_group_level1, true);
 	lv_group_set_wrap(g_group_level2, true);
+	lv_group_set_wrap(g_group_level3, true);
 	lv_indev_set_group(keypad_device, g_group_level1);
 	lv_indev_set_group(encoder_device, g_group_level1);
 
