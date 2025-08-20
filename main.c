@@ -35,6 +35,11 @@ static bool is_brightness_item(const menu_item_t* item);
 static void on_brightness_arc_event(lv_event_t* e);
 // 新增：一级菜单专用按钮创建函数
 static lv_obj_t* create_level1_menu_button(lv_obj_t* parent, const menu_item_t* item);
+// 新增：Volume 支持
+static bool is_volume_item(const menu_item_t* item);
+static void on_volume_bar_event(lv_event_t* e);
+// 新增：Language 选项事件（可选，用于将来扩展选择逻辑）
+static void on_language_option_event(lv_event_t* e);
 
 // 全局样式与对象
 static lv_style_t g_style_item;
@@ -62,11 +67,23 @@ static bool g_in_level3_focus = false;
 static lv_obj_t* g_brightness_arc = NULL;
 static lv_obj_t* g_brightness_value_label = NULL;
 static int32_t g_brightness_value = 80;
+// 新增：音量控件与值
+static lv_obj_t* g_volume_bar = NULL;
+static lv_obj_t* g_volume_value_label = NULL;
+static int32_t g_volume_value = 50;
 
 // 示例菜单数据
+// 新增：Language 子菜单
+static const menu_item_t LANGUAGE_CHILDREN[] = {
+	{ NULL, "English",  -1, false, NULL, 0, false },
+	{ NULL, "中文",       -1, false, NULL, 0, false },
+	{ NULL, "日本語",     -1, false, NULL, 0, false },
+	{ NULL, "한국어",     -1, false, NULL, 0, false },
+	{ NULL, "Español",   -1, false, NULL, 0, false },
+};
 static const menu_item_t SETTINGS_CHILDREN[] = {
 	{ LV_SYMBOL_AUDIO,    "Volume", 50, false, NULL, 0, false },
-	{ LV_SYMBOL_EDIT,     "Language", -1, false, NULL, 0, false },
+	{ LV_SYMBOL_EDIT,     "Language", -1, false, LANGUAGE_CHILDREN, sizeof(LANGUAGE_CHILDREN) / sizeof(LANGUAGE_CHILDREN[0]), false },
 	{ LV_SYMBOL_EYE_OPEN, "Brightness", 80, false, NULL, 0, false },
 };
 
@@ -128,6 +145,10 @@ static bool is_brightness_item(const menu_item_t* item)
 {
 	return item && item->label_text && strcmp(item->label_text, "Brightness") == 0;
 }
+static bool is_volume_item(const menu_item_t* item)
+{
+	return item && item->label_text && strcmp(item->label_text, "Volume") == 0;
+}
 
 static void on_menu_item_event(lv_event_t* e)
 {
@@ -178,7 +199,7 @@ static void on_menu_item_event(lv_event_t* e)
 	}
 
 	if (parent == g_menu_level2) {
-		if (is_brightness_item(item)) {
+		if (is_brightness_item(item) || is_volume_item(item) || (item->children && item->child_count > 0)) {
 			show_level3_for(item);
 			enter_level3_focus();
 			return;
@@ -349,11 +370,58 @@ static void on_brightness_arc_event(lv_event_t* e)
 	}
 }
 
+static void on_volume_bar_event(lv_event_t* e)
+{
+	lv_event_code_t code = lv_event_get_code(e);
+	lv_obj_t* obj = lv_event_get_target(e);
+	if (code == LV_EVENT_VALUE_CHANGED) {
+		int32_t v = lv_bar_get_value(obj);
+		g_volume_value = v;
+		if (g_volume_value_label) {
+			char buf[16];
+			lv_snprintf(buf, sizeof(buf), "%d", v);
+			lv_label_set_text(g_volume_value_label, buf);
+		}
+		return;
+	}
+	if (code == LV_EVENT_KEY) {
+		uint32_t key = lv_event_get_key(e);
+		int32_t v = lv_bar_get_value(obj);
+		int32_t step_small = 1;
+		int32_t step_large = 5;
+		switch (key) {
+		case LV_KEY_LEFT:
+		case LV_KEY_DOWN:
+			v -= step_small; break;
+		case LV_KEY_RIGHT:
+		case LV_KEY_UP:
+			v += step_small; break;
+		case LV_KEY_PREV:
+			v -= step_large; break; // PgUp
+		case LV_KEY_NEXT:
+			v += step_large; break; // PgDn
+		default:
+			return;
+		}
+		if (v < 0) v = 0;
+		if (v > 100) v = 100;
+		lv_bar_set_value(obj, v, LV_ANIM_OFF);
+		// LV_EVENT_VALUE_CHANGED 将更新标签
+	}
+}
+// 语言选项事件（当前预留，可在点击时处理选中等逻辑）
+static void on_language_option_event(lv_event_t* e)
+{
+	LV_UNUSED(e);
+}
+
 static void show_level3_for(const menu_item_t* item)
 {
 	lv_obj_clean(g_menu_level3);
 	g_brightness_arc = NULL;
 	g_brightness_value_label = NULL;
+	g_volume_bar = NULL;
+	g_volume_value_label = NULL;
 	if (g_group_level3) lv_group_remove_all_objs(g_group_level3);
 
 	if (is_brightness_item(item)) {
@@ -375,10 +443,46 @@ static void show_level3_for(const menu_item_t* item)
 		g_brightness_value_label = lv_label_create(g_menu_level3);
 		update_brightness_label(g_brightness_value);
 		lv_obj_align_to(g_brightness_value_label, g_brightness_arc, LV_ALIGN_OUT_BOTTOM_MID, 0, 12);
-	} else {
-		lv_obj_t* label = lv_label_create(g_menu_level3);
-		lv_label_set_text(label, "No details");
+		return;
 	}
+
+	if (is_volume_item(item)) {
+		// 标题
+		lv_obj_t* title = lv_label_create(g_menu_level3);
+		lv_label_set_text(title, "Volume");
+
+		// 竖直条形 gauge（使用 lv_bar）
+		g_volume_bar = lv_bar_create(g_menu_level3);
+		lv_obj_set_size(g_volume_bar, 24, 180);
+		lv_bar_set_range(g_volume_bar, 0, 100);
+		lv_bar_set_value(g_volume_bar, g_volume_value, LV_ANIM_OFF);
+		lv_obj_center(g_volume_bar);
+		lv_obj_add_event_cb(g_volume_bar, on_volume_bar_event, LV_EVENT_ALL, NULL);
+		if (g_group_level3) lv_group_add_obj(g_group_level3, g_volume_bar);
+
+		// 数值标签
+		g_volume_value_label = lv_label_create(g_menu_level3);
+		{
+			char buf[16];
+			lv_snprintf(buf, sizeof(buf), "%d", g_volume_value);
+			lv_label_set_text(g_volume_value_label, buf);
+		}
+		lv_obj_align_to(g_volume_value_label, g_volume_bar, LV_ALIGN_OUT_BOTTOM_MID, 0, 12);
+		return;
+	}
+
+	// 若该项有子项，则在右侧以列表形式显示（例如 Language）
+	if (item && item->children && item->child_count > 0) {
+		// 标题
+		lv_obj_t* title = lv_label_create(g_menu_level3);
+		lv_label_set_text(title, item->label_text ? item->label_text : "");
+		// 子项列表
+		build_level_items(g_menu_level3, item->children, item->child_count, g_group_level3, false);
+		return;
+	}
+
+	lv_obj_t* label = lv_label_create(g_menu_level3);
+	lv_label_set_text(label, "No details");
 }
 
 static void enter_level3_focus(void)
