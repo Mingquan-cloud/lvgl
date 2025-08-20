@@ -33,6 +33,8 @@ static void enter_level3_focus(void);
 static void exit_level3_focus(void);
 static bool is_brightness_item(const menu_item_t* item);
 static void on_brightness_arc_event(lv_event_t* e);
+// 新增：一级菜单专用按钮创建函数
+static lv_obj_t* create_level1_menu_button(lv_obj_t* parent, const menu_item_t* item);
 
 // 全局样式与对象
 static lv_style_t g_style_item;
@@ -254,9 +256,17 @@ static void build_level_items(lv_obj_t* panel, const menu_item_t* items, uint32_
 
 	lv_obj_t* first_focusable = NULL;
 
+	// 判断是否为一级菜单（通过panel判断）
+	bool is_level1 = (panel == g_menu_level1);
+
 	for (uint32_t i = 0; i < count; i++) {
 		const menu_item_t* item = &items[i];
-		lv_obj_t* btn = create_menu_button(panel, item);
+		lv_obj_t* btn;
+		if (is_level1) {
+			btn = create_level1_menu_button(panel, item);
+		} else {
+			btn = create_menu_button(panel, item);
+		}
 		if (group) lv_group_add_obj(group, btn);
 		if (!first_focusable && !item->disabled) first_focusable = btn;
 	}
@@ -385,6 +395,46 @@ static void exit_level3_focus(void)
 	if (g_keypad_indev) lv_indev_set_group(g_keypad_indev, g_group_level2);
 	if (g_encoder_indev) lv_indev_set_group(g_encoder_indev, g_group_level2);
 	if (g_group_level2) lv_group_focus_next(g_group_level2);
+}
+
+static lv_obj_t* create_level1_menu_button(lv_obj_t* parent, const menu_item_t* item)
+{
+	lv_obj_t* btn = lv_btn_create(parent);
+	lv_obj_set_width(btn, lv_pct(100));
+	lv_obj_set_height(btn, 70);  // 增加高度以适应垂直布局
+	lv_obj_set_flex_flow(btn, LV_FLEX_FLOW_COLUMN);
+	lv_obj_set_flex_align(btn, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+	lv_obj_add_style(btn, &g_style_item, LV_PART_MAIN);
+	lv_obj_add_style(btn, &g_style_item_focused, LV_PART_MAIN | LV_STATE_FOCUSED);
+	lv_obj_add_style(btn, &g_style_item_disabled, LV_PART_MAIN | LV_STATE_DISABLED);
+	lv_obj_add_flag(btn, LV_OBJ_FLAG_SCROLL_ON_FOCUS);
+	lv_obj_clear_flag(btn, LV_OBJ_FLAG_SCROLLABLE);
+
+	if (item && item->disabled) {
+		lv_obj_add_state(btn, LV_STATE_DISABLED);
+	}
+
+	if (item && item->icon_text && item->icon_text[0]) {
+		lv_obj_t* icon = lv_label_create(btn);
+		lv_label_set_text(icon, item->icon_text);
+	}
+
+	if (item && item->label_text) {
+		lv_obj_t* label = lv_label_create(btn);
+		lv_label_set_text(label, item->label_text);
+		lv_obj_set_flex_grow(label, 1);
+	}
+
+	if (item && item->number >= 0) {
+		char buf[16];
+		lv_snprintf(buf, sizeof(buf), "%d", item->number);
+		lv_obj_t* num = lv_label_create(btn);
+		lv_label_set_text(num, buf);
+	}
+
+	lv_obj_add_event_cb(btn, on_menu_item_event, LV_EVENT_ALL, (void*)item);
+
+	return btn;
 }
 
 int main()
